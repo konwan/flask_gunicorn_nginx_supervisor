@@ -1,0 +1,117 @@
+
+# flask
+  hello.py:    from flask import Flask
+               app = Flask(__name__)
+
+               @app.route('/')
+               def index():
+                   return 'hello world'
+
+               if __name__ == '__main__':
+                   app.debug = True
+                   app.run(host='0.0.0.0', port=81)
+                   """ (replace to nginx proxy)
+                   from werkzeug.contrib.fixers import ProxyFix
+                   app.wsgi_app = ProxyFix(app.wsgi_app)
+                   app.run()
+                   """
+  command:     python hello.py
+  
+# gunicorn
+  gc_set.py:   from multiprocessing import cpu_count
+               from os import environ
+
+               def max_workers():
+                   return cpu_count()
+
+               # bind = '0.0.0.0:' + environ.get('PORT', '8000')
+               # max_requests = 1000
+               # worker_class = 'gevent'
+               # workers = max_workers()
+
+               bind = '0.0.0.0:80'
+               # workers = 8  # or multiprocessing.cpu_count() * 2 + 1
+               # worker_connections = 100
+               # worker_class = 'sync'
+               # backlog = 2048
+               daemon = False # when use supervisor to minitor
+
+  command:     gunicorn 入口文件名:app
+               gunicorn -w 4 --bind 0.0.0.0:85 hello:app  # /usr/local/bin/gunicorn
+               gunicorn -c gc_set.py wsgi:app
+               
+
+# [nginx](http://www.jianshu.com/p/7ce34414963e)
+  conf_path:   /etc/nginx/nginx.conf
+               /etc/nginx/conf.d/default.conf 
+  conf:        
+               server {
+                  listen 80;                            #(80 代理 85 port)
+                  server_name server.name;              # host domain name / ip
+
+                  location / {
+                      proxy_pass http://127.0.0.1:85;   # redirect host ip
+                      proxy_set_header Host $host;
+                      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  }
+               }   
+   command:    1. check config
+                  $ nginx -t
+                    nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+                    nginx: configuration file /etc/nginx/nginx.conf test is successful 
+               2. reload config
+                  $ service nginx restart
+                    
+# [supervisor](http://hatemegalaxy.blogspot.tw/2015/11/tornado-11-supervisor.html)
+   sv.ini:     ; group 區塊 指定哪些程序屬於同一個群組，範例內指定了一個群組(cindy)，它目前擁有一個成員(hello)
+               [group:cindy]
+               programs=hello
+
+               ; program 區塊  此區塊內必須詳細的定義執行程式名稱、路徑及 Log 存放路徑
+               [program:hello]
+               command=gunicorn -b0.0.0.0:85 hello:app ;
+               # command=python /root/miku/hello.py -port=85 -ip='0.0.0.0'
+               # directory=/root/miku;
+               startsecs=0;
+               stopwaitsecs=0;
+               autostart=false;
+               autorestart=false;
+               stdout_logfile=/miku/hello.log;
+               stderr_logfile=/miku/hello.err;
+
+               ; inet_http_server 區塊 Supervisor 提供網頁管理介面，從瀏覽器中就可以直接操控
+               [inet_http_server]
+                port=127.0.0.1:9001
+
+               [supervisord]
+
+               [supervisorctl]
+                serverurl=http://127.0.0.1:9001
+
+               [rpcinterface:supervisor]
+                supervisor.rpcinterface_factory = supervisor.rpcinterface:make_main_rpcinterface
+
+   server:     State	      Description	             Name	          Action
+               running     pid 89, uptime 0:47:19	   cindy:hello	  Restart    Stop   Clear Log   Tail -f 
+
+
+   command:    1. new config
+                  echo_supervisord_conf > /etc/supervisord.conf
+               2. 
+                  $ supervisord -c sv.ini
+                  $ supervisorctl -c sv.ini reload
+                    Restarted supervisord
+                  $ supervisorctl -c sv.ini status
+                    cindy:hello                      STOPPED   Not started
+                  $ supervisorctl -c sv.ini start all
+                    cindy:hello: started
+                  $ supervisorctl -c sv.ini status
+                    cindy:hello                      RUNNING   pid 67, uptime 0:00:01
+
+   problems:   1. http://127.0.0.1:9001 refused connection
+                  [inet_http_server] not setting
+                  have to start supervisord before use supervisorctl
+                  $supervisord -c sv.ini
+                  $supervisorctl -c sv.ini reload
+                  
+[docker_image]()
